@@ -16,6 +16,8 @@ import {
   X,
 } from 'lucide-react'
 import { RequirementVerificationPanel } from './RequirementVerificationPanel'
+import { RequirementTraceLinksPanel } from './RequirementTraceLinksPanel'
+import { VerificationStatusControl } from './VerificationStatusControl'
 import type { Requirement } from '@cascadia/commons/items/types/requirement'
 import type { Design } from '@cascadia/commons/types/design'
 import { PageContainer } from '@/components/layout'
@@ -84,14 +86,6 @@ const VERIFICATION_METHOD_OPTIONS = [
   { value: 'Documentation', label: 'Documentation' },
 ]
 
-const VERIFICATION_STATUS_OPTIONS = [
-  { value: 'NotStarted', label: 'Not Started' },
-  { value: 'InProgress', label: 'In Progress' },
-  { value: 'Passed', label: 'Passed' },
-  { value: 'Failed', label: 'Failed' },
-  { value: 'Waived', label: 'Waived' },
-]
-
 const priorityVariant = (priority: string) => {
   const variants: Record<
     string,
@@ -103,20 +97,6 @@ const priorityVariant = (priority: string) => {
     WontHave: 'secondary',
   }
   return variants[priority] || 'default'
-}
-
-const verificationStatusVariant = (status: string) => {
-  const variants: Record<
-    string,
-    'default' | 'secondary' | 'success' | 'warning' | 'destructive'
-  > = {
-    NotStarted: 'secondary',
-    InProgress: 'default',
-    Passed: 'success',
-    Failed: 'destructive',
-    Waived: 'secondary',
-  }
-  return variants[status] || 'secondary'
 }
 
 const createEmptyRequirement = (): Requirement => ({
@@ -138,7 +118,6 @@ const createEmptyRequirement = (): Requirement => ({
   modifiedAt: undefined,
   verificationMethod: undefined,
   verificationStatus: undefined,
-  allocatedDesignId: undefined,
   parentRequirementId: undefined,
 })
 
@@ -760,29 +739,37 @@ export function RequirementDetail({
                       options={VERIFICATION_METHOD_OPTIONS}
                       placeholder="Select method..."
                     />
-                    <ViewEditBadge
-                      label="Verification Status"
-                      value={
-                        isEditing
-                          ? requirement.verificationStatus
-                          : currentRequirement.verificationStatus
-                      }
-                      onChange={(v) => updateField('verificationStatus', v)}
-                      isEditing={isEditing}
-                      options={VERIFICATION_STATUS_OPTIONS}
-                      variant={verificationStatusVariant}
+                    {/* Derived from the verifying tests, never edited here;
+                        the waiver is its own action. */}
+                    <VerificationStatusControl
+                      requirement={currentRequirement}
                     />
                   </dl>
                 </CardContent>
               </Card>
 
-              {/* Verification Panel - Test Cases */}
+              {/* The trace panels: what satisfies this requirement, what it
+                  is allocated to, and what verifies it */}
               {!isCreateMode && currentRequirement.id && (
-                <RequirementVerificationPanel
-                  requirementId={currentRequirement.id}
-                  designId={currentRequirement.designId}
-                  isEditable={isEditable}
-                />
+                <>
+                  <RequirementTraceLinksPanel
+                    kind="satisfiedBy"
+                    requirementId={currentRequirement.id}
+                    designId={currentRequirement.designId}
+                    isEditable={isEditable}
+                  />
+                  <RequirementTraceLinksPanel
+                    kind="allocatedTo"
+                    requirementId={currentRequirement.id}
+                    designId={currentRequirement.designId}
+                    isEditable={isEditable}
+                  />
+                  <RequirementVerificationPanel
+                    requirementId={currentRequirement.id}
+                    designId={currentRequirement.designId}
+                    isEditable={isEditable}
+                  />
+                </>
               )}
             </div>
 
