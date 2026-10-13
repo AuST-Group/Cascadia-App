@@ -272,6 +272,7 @@ export function DocumentDetail({
     isCreateMode,
     isReleasedFamily: isReleasedLineage,
     isMainProtected: editContext?.isMainProtected ?? false,
+    existsOnMain: editContext?.existsOnMain,
     context,
     branch: contextBranch,
   })

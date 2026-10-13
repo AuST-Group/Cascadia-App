@@ -37,6 +37,7 @@ export function resolveItemBranchActions({
   isCreateMode,
   isReleasedFamily,
   isMainProtected,
+  existsOnMain,
   context,
   branch,
 }: {
@@ -46,6 +47,7 @@ export function resolveItemBranchActions({
   isCreateMode: boolean
   isReleasedFamily: boolean
   isMainProtected: boolean
+  existsOnMain?: boolean
   context: VersionContext
   branch?: BranchDetail
 }): ItemBranchActions {
@@ -78,7 +80,11 @@ export function resolveItemBranchActions({
       deleteDescription:
         `Remove ${itemDisplay} from ${branch.name}? ` +
         `Its unreleased changes and checkout on this ECO will be discarded. ` +
-        `The ${itemLabel} on main will not be deleted.`,
+        (existsOnMain === false
+          ? `This ${itemLabel.toLowerCase()} exists only on this ECO; there is no version on main to preserve.`
+          : existsOnMain === true
+            ? `The ${itemLabel} on main will not be deleted.`
+            : `Confirm that you want to discard this ECO's version of the ${itemLabel.toLowerCase()}.`),
     }
   }
 
@@ -91,7 +97,11 @@ export function resolveItemBranchActions({
       deleteTitle: `Delete ${itemLabel} on Branch`,
       deleteDescription:
         `Delete ${itemDisplay} on ${branch?.name ?? 'this branch'}? ` +
-        `The ${itemLabel} on main will not be deleted until the branch is formally applied.`,
+        (existsOnMain === false
+          ? `This ${itemLabel.toLowerCase()} exists only on this branch; there is no version on main to preserve.`
+          : existsOnMain === true
+            ? `The ${itemLabel} on main will not be deleted until the branch is formally applied.`
+            : `The selected branch version of the ${itemLabel.toLowerCase()} will be discarded.`),
     }
   }
 

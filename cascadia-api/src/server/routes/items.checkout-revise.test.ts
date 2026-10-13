@@ -71,6 +71,7 @@ interface EditContextResponse {
     editContext: {
       lockBranchId: string | null
       branchType: string | null
+      existsOnMain: boolean
       isMainProtected: boolean
     }
   }
@@ -232,6 +233,7 @@ describe('revise-checkout → save', () => {
     expect(editContext.lockBranchId).toBe(changeOrderBranchId)
     expect(editContext.branchType).toBe('eco')
     expect(editContext.isMainProtected).toBe(true)
+    expect(editContext.existsOnMain).toBe(true)
   })
 
   it('checkout mints a working copy and reports its id; the released row is untouched', async () => {

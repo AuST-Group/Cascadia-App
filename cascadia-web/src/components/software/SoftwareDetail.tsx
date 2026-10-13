@@ -270,6 +270,7 @@ export function SoftwareDetail({
     isCreateMode,
     isReleasedFamily,
     isMainProtected: editContext?.isMainProtected ?? false,
+    existsOnMain: editContext?.existsOnMain,
     context,
     branch: contextBranch,
   })

@@ -436,6 +436,7 @@ app.get(
         editContext: {
           lockBranchId,
           branchType,
+          existsOnMain: branchInfo?.changeType !== 'added',
           isBranchLocked: branchInfo?.isLocked ?? false,
           isMainProtected,
           checkedOutBy,
