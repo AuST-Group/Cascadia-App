@@ -116,4 +116,59 @@ describe('guided tour lifecycle', () => {
     expect(document.querySelectorAll('.driver-popover')).toHaveLength(0)
     expect(localStorage.getItem('cascadia-tour-completed')).toBeNull()
   })
+  it('does not let stale cleanup cancel a replacement automatic start', () => {
+    const { result } = renderHook(() => useTour(), { wrapper })
+    act(() => {
+      const oldCleanup = result.current.triggerFirstTimeTour()
+      oldCleanup()
+      result.current.triggerFirstTimeTour()
+      oldCleanup()
+      vi.advanceTimersByTime(1000)
+    })
+    expect(document.querySelectorAll('.driver-popover')).toHaveLength(1)
+  })
+  it('gives duplicate requests no authority over the original request', () => {
+    const { result } = renderHook(() => useTour(), { wrapper })
+    act(() => {
+      result.current.triggerFirstTimeTour()
+      const duplicateCleanup = result.current.triggerFirstTimeTour()
+      duplicateCleanup()
+      vi.advanceTimersByTime(1000)
+    })
+    expect(document.querySelectorAll('.driver-popover')).toHaveLength(1)
+  })
+  it.each(['startTour', 'resetTour', 'triggerFirstTimeTour'] as const)(
+    'rejects retained %s after provider unmount',
+    (command) => {
+      const { result, unmount } = renderHook(() => useTour(), { wrapper })
+      const retained = result.current
+      unmount()
+      act(() => {
+        retained[command]()
+        vi.advanceTimersByTime(1000)
+      })
+      expect(document.querySelectorAll('.driver-popover')).toHaveLength(0)
+      expect(localStorage.getItem('cascadia-tour-completed')).toBeNull()
+    },
+  )
+  it('closes and remembers acknowledgement when browser persistence fails', () => {
+    localStorage.setItem('cascadia-tour-completed', 'false')
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Storage blocked', 'SecurityError')
+    })
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const { result } = renderHook(() => useTour(), { wrapper })
+    act(() => result.current.startTour())
+    act(() =>
+      (
+        document.querySelector('.driver-popover-close-btn') as HTMLButtonElement
+      ).click(),
+    )
+    expect(result.current.hasCompletedTour).toBe(true)
+    act(() => {
+      result.current.triggerFirstTimeTour()
+      vi.advanceTimersByTime(1000)
+    })
+    expect(document.querySelectorAll('.driver-popover')).toHaveLength(0)
+  })
 })
