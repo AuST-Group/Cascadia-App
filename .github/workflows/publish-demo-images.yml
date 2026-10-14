@@ -61,6 +61,11 @@ jobs:
   # Decide which images need building. Emits a JSON matrix consumed by `publish`.
   # ---------------------------------------------------------------------------
   plan:
+    # Only this repository publishes images. A fork that carries this file —
+    # an edition that merges from here — must not push to the org packages
+    # backing the public demo; every other job needs this one, so skipping it
+    # skips the workflow.
+    if: github.repository == 'Cascadia-PLM/Cascadia-App'
     runs-on: ubuntu-latest
     outputs:
       images: ${{ steps.select.outputs.images }}
