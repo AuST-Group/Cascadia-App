@@ -99,7 +99,7 @@ export function NewRelationshipTypeDialog({
   const finalType =
     relationshipType === 'custom' ? customType : relationshipType
 
-  // Under BOM this is the source item's design plus the Standard Library —
+  // Under BOM this is the source item's design plus the libraries —
   // including when the user reaches BOM by typing it as a custom type
   const {
     scope: bomScope,
