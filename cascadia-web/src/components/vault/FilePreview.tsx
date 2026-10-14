@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Cascadia PLM LLC
 
-import { Suspense, lazy, useEffect, useState } from 'react'
+import { Suspense, lazy, useMemo } from 'react'
 import { Download, Loader2 } from 'lucide-react'
 import { previewKindFor } from '@cascadia/commons/vault/preview'
 import type { PreviewKind } from '@cascadia/commons/vault/preview'
@@ -10,6 +10,7 @@ import { Button } from '@/components/ui'
 import { cn } from '@/utils'
 import { SvgViewer } from '@/components/vault/SvgViewer'
 import { apiErrorFromResponse } from '@/api/client'
+import { useOwnedResource } from '@/lifecycle/useOwnedResource'
 
 // pdf.js and its worker are around a megabyte; most sessions never open a PDF,
 // so the viewer is split out and fetched on first use.
@@ -68,51 +69,34 @@ function Centered({ children }: { children: React.ReactNode }) {
  * the thing that keeps the credential out of the URL.
  */
 export function FilePreview({ file, markup, className }: FilePreviewProps) {
-  const [content, setContent] = useState<LoadedContent | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
   const kind = previewKindFor(file.originalFileName)
-
-  useEffect(() => {
-    if (kind === null) return
-
-    let objectUrl: string | null = null
-    let cancelled = false
-
-    const load = async () => {
-      setContent(null)
-      setError(null)
-
-      try {
-        const response = await fetch(`/api/v1/files/${file.id}/content`)
-
-        if (!response.ok) {
-          throw await apiErrorFromResponse(response, 'Preview failed')
-        }
-
-        if (TEXTUAL_KINDS.has(kind)) {
-          const text = await response.text()
-          if (cancelled) return
-          setContent({ kind, objectUrl: null, text })
-          return
-        }
-
-        const blob = await response.blob()
-        if (cancelled) return
-        objectUrl = URL.createObjectURL(blob)
-        setContent({ kind, objectUrl, text: null })
-      } catch (err) {
-        if (!cancelled) setError((err as Error).message)
-      }
-    }
-
-    void load()
-
-    return () => {
-      cancelled = true
-      if (objectUrl !== null) URL.revokeObjectURL(objectUrl)
-    }
+  const input = useMemo(() => {
+    return kind === null ? null : { id: file.id, kind }
   }, [file.id, kind])
+  const result = useOwnedResource(
+    input,
+    async ({ id, kind: previewKind }, lifetime): Promise<LoadedContent> => {
+      const response = await fetch(`/api/v1/files/${id}/content`, {
+        signal: lifetime.signal,
+      })
+      if (!response.ok)
+        throw await apiErrorFromResponse(response, 'Preview failed')
+      if (TEXTUAL_KINDS.has(previewKind)) {
+        return {
+          kind: previewKind,
+          text: await response.text(),
+          objectUrl: null,
+        }
+      }
+      const blob = await response.blob()
+      const objectUrl = lifetime.acquire(
+        () => URL.createObjectURL(blob),
+        URL.revokeObjectURL,
+      )
+      return { kind: previewKind, objectUrl, text: null }
+    },
+  )
+  const content = result.kind === 'ready' ? result.value : null
 
   const downloadButton = (
     <Button variant="ghost" size="icon" asChild title="Download">
@@ -133,12 +117,16 @@ export function FilePreview({ file, markup, className }: FilePreviewProps) {
     )
   }
 
-  if (error !== null) {
+  if (result.kind === 'failed') {
     return (
       <Centered>
         <div className="space-y-1">
           <p className="text-red-600 dark:text-red-400">Preview unavailable</p>
-          <p className="text-sm text-slate-600 dark:text-slate-400">{error}</p>
+          <p className="text-sm text-slate-600 dark:text-slate-400">
+            {result.error instanceof Error
+              ? result.error.message
+              : String(result.error)}
+          </p>
         </div>
       </Centered>
     )
