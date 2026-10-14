@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Cascadia PLM LLC
 
-import { useEffect, useState } from 'react'
 import { Image as ImageIcon, X } from 'lucide-react'
 import { Badge, Button } from '@/components/ui'
+import { useOwnedResource } from '@/lifecycle/useOwnedResource'
 
 interface PendingImageStripProps {
   files: Array<File>
@@ -16,7 +16,12 @@ interface PendingImageStripProps {
  * becomes the item's thumbnail.
  */
 export function PendingImageStrip({ files, onRemove }: PendingImageStripProps) {
-  const previews = useObjectUrls(files)
+  const result = useOwnedResource(files, (images, lifetime) =>
+    images.map((file) =>
+      lifetime.acquire(() => URL.createObjectURL(file), URL.revokeObjectURL),
+    ),
+  )
+  const previews = result.kind === 'ready' ? result.value : []
   if (files.length === 0) return null
 
   return (
@@ -66,17 +71,4 @@ export function PendingImageStrip({ files, onRemove }: PendingImageStripProps) {
       </ul>
     </div>
   )
-}
-
-/** Object URLs for a list of files, revoked when the list changes or unmounts. */
-function useObjectUrls(files: Array<File>): Array<string> {
-  const [urls, setUrls] = useState<Array<string>>([])
-  useEffect(() => {
-    const next = files.map((file) => URL.createObjectURL(file))
-    setUrls(next)
-    return () => {
-      for (const url of next) URL.revokeObjectURL(url)
-    }
-  }, [files])
-  return urls
 }
