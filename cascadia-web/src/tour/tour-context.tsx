@@ -22,16 +22,43 @@ interface TourContextValue {
   isTourActive: boolean
   startTour: () => void
   resetTour: () => void
-  triggerFirstTimeTour: () => void
+  triggerFirstTimeTour: () => () => void
 }
 
 const TourContext = createContext<TourContextValue | null>(null)
 
-export function TourProvider({ children }: { children: ReactNode }) {
+export function TourProvider({
+  children,
+  enabled = true,
+}: {
+  children: ReactNode
+  enabled?: boolean
+}) {
   const [hasCompletedTour, setHasCompletedTour] = useState(true) // Default to true to prevent flash
   const [isTourActive, setIsTourActive] = useState(false)
   const driverRef = useRef<Driver | null>(null)
   const hasCheckedStorage = useRef(false)
+  const pendingStart = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const dismissingForNavigation = useRef(false)
+
+  const cancelPendingStart = useCallback(() => {
+    if (pendingStart.current !== null) {
+      clearTimeout(pendingStart.current)
+      pendingStart.current = null
+    }
+  }, [])
+
+  const stopTour = useCallback(() => {
+    cancelPendingStart()
+    dismissingForNavigation.current = true
+    driverRef.current?.destroy()
+    dismissingForNavigation.current = false
+  }, [cancelPendingStart])
+
+  useEffect(() => {
+    if (!enabled) stopTour()
+    return stopTour
+  }, [enabled, stopTour])
 
   // Check localStorage on mount (but don't auto-trigger - wait for login)
   useEffect(() => {
@@ -44,6 +71,9 @@ export function TourProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const startTourInternal = useCallback(() => {
+    cancelPendingStart()
+    // The ref is synchronous; React state cannot guard two starts in one tick.
+    if (!enabled || driverRef.current) return
     // Create a new driver instance each time
     const driverInstance = driver({
       showProgress: true,
@@ -60,49 +90,60 @@ export function TourProvider({ children }: { children: ReactNode }) {
       prevBtnText: 'Previous',
       onDestroyStarted: () => {
         // Mark tour as completed when user finishes or closes
-        localStorage.setItem(TOUR_STORAGE_KEY, 'true')
-        setHasCompletedTour(true)
+        if (!dismissingForNavigation.current) {
+          localStorage.setItem(TOUR_STORAGE_KEY, 'true')
+          setHasCompletedTour(true)
+        }
         setIsTourActive(false)
         driverInstance.destroy()
       },
       onDestroyed: () => {
         setIsTourActive(false)
-        driverRef.current = null
+        if (driverRef.current === driverInstance) driverRef.current = null
       },
     })
 
     driverRef.current = driverInstance
     setIsTourActive(true)
     driverInstance.drive()
-  }, [])
+  }, [enabled, cancelPendingStart])
 
   const startTour = useCallback(() => {
     // If already active, don't start again
-    if (isTourActive) return
+    if (driverRef.current) return
 
     startTourInternal()
-  }, [isTourActive, startTourInternal])
+  }, [startTourInternal])
 
   const resetTour = useCallback(() => {
+    stopTour()
     // Clear completion state and restart
     localStorage.removeItem(TOUR_STORAGE_KEY)
     setHasCompletedTour(false)
     startTourInternal()
-  }, [startTourInternal])
+  }, [startTourInternal, stopTour])
 
   const triggerFirstTimeTour = useCallback(() => {
     // Skip tour in test mode (Playwright sets this via storageState)
-    if (localStorage.getItem('cascadia-e2e-test') === 'true') return
+    if (!enabled || localStorage.getItem('cascadia-e2e-test') === 'true')
+      return cancelPendingStart
 
     // Only trigger if user hasn't completed the tour before
     const completed = localStorage.getItem(TOUR_STORAGE_KEY)
-    if (completed === 'true') return
+    if (
+      completed === 'true' ||
+      driverRef.current ||
+      pendingStart.current !== null
+    )
+      return cancelPendingStart
 
     // Delay to allow the dashboard to render
-    setTimeout(() => {
-      startTourInternal()
+    pendingStart.current = setTimeout(() => {
+      pendingStart.current = null
+      if (localStorage.getItem(TOUR_STORAGE_KEY) !== 'true') startTourInternal()
     }, 1000)
-  }, [startTourInternal])
+    return cancelPendingStart
+  }, [enabled, startTourInternal, cancelPendingStart])
 
   return (
     <TourContext.Provider
