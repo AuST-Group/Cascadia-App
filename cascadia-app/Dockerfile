@@ -76,9 +76,14 @@ ARG APP=
 # written by then.
 #
 # Passed in rather than derived: `.git` is excluded from the build context (see
-# .dockerignore), so `git describe` cannot run in here. scripts/build-and-push.sh
-# in the plm-server repo computes them on the host.
-ARG BUILD_TAG=dev
+# .dockerignore), so `git describe` cannot run in here. The publish workflow
+# passes the ref and short commit it is building; a build by hand can pass its
+# own, e.g. --build-arg BUILD_TAG=v0.6.0 --build-arg BUILD_SHA=6f89879.
+#
+# BUILD_TAG defaults to empty, not `dev`: unstamped, a production build shows
+# the release version from package.json (see cascadia-web/src/build-info.ts),
+# and a non-empty default would hide that fallback behind a literal `dev`.
+ARG BUILD_TAG=""
 ARG BUILD_SHA=""
 ARG BUILD_DIRTY=false
 ENV VITE_BUILD_TAG=${BUILD_TAG}
