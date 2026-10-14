@@ -28,6 +28,7 @@ import { SourceDiffDialog } from './SourceDiffDialog'
 import type { Extension } from '@codemirror/state'
 import type { SourceDiffTarget } from './SourceDiffDialog'
 import type { SoftwareManifestEntry, SoftwareVersion } from '@/query'
+import { useOwnedElement } from '@/lifecycle/useOwnedElement'
 import {
   Badge,
   Button,
@@ -138,49 +139,47 @@ function CodeEditor({
   readOnly: boolean
   onChange?: (doc: string) => void
 }) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const onChangeRef = useRef(onChange)
-  onChangeRef.current = onChange
-
-  useEffect(() => {
-    if (!containerRef.current) return
-
-    const isDark = document.documentElement.classList.contains('dark')
-    const extensions: Array<Extension> = [
-      basicSetup,
-      EditorView.theme({
-        '&': { fontSize: '13px' },
-        '.cm-scroller': { fontFamily: 'ui-monospace, monospace' },
-      }),
-    ]
-    if (readOnly) {
-      extensions.push(
-        EditorState.readOnly.of(true),
-        EditorView.editable.of(false),
-      )
-    } else {
-      extensions.push(
-        EditorView.updateListener.of((update) => {
-          if (update.docChanged) {
-            onChangeRef.current?.(update.state.doc.toString())
-          }
+  // Content is an initial snapshot: a refetch must not erase an in-progress edit.
+  const identity = useMemo(() => ({ path, readOnly }), [path, readOnly])
+  const containerRef = useOwnedElement(
+    identity,
+    (parent, lifetime, changed) => {
+      const isDark = document.documentElement.classList.contains('dark')
+      const extensions: Array<Extension> = [
+        basicSetup,
+        EditorView.theme({
+          '&': { fontSize: '13px' },
+          '.cm-scroller': { fontFamily: 'ui-monospace, monospace' },
         }),
+      ]
+      if (readOnly) {
+        extensions.push(
+          EditorState.readOnly.of(true),
+          EditorView.editable.of(false),
+        )
+      } else {
+        extensions.push(
+          EditorView.updateListener.of((update) => {
+            if (update.docChanged) {
+              changed(update.state.doc.toString())
+            }
+          }),
+        )
+      }
+      const lang = languageFor(path)
+      if (lang) extensions.push(lang)
+      if (isDark) extensions.push(oneDark)
+
+      lifetime.adopt(
+        new EditorView({
+          state: EditorState.create({ doc: content, extensions }),
+          parent,
+        }),
+        (view) => view.destroy(),
       )
-    }
-    const lang = languageFor(path)
-    if (lang) extensions.push(lang)
-    if (isDark) extensions.push(oneDark)
-
-    const view = new EditorView({
-      state: EditorState.create({ doc: content, extensions }),
-      parent: containerRef.current,
-    })
-
-    return () => view.destroy()
-    // Recreate only when switching files or toggling edit mode - `content`
-    // is the initial doc, not a controlled value. A background refetch of
-    // the same file therefore leaves the user's in-progress edits alone.
-  }, [path, readOnly])
+    },
+    onChange,
+  )
 
   return <div ref={containerRef} className="max-h-[65vh] overflow-auto" />
 }

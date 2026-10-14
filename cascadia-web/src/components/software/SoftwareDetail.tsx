@@ -951,6 +951,7 @@ export function SoftwareDetail({
               <ExternalSourcePanel software={current} />
             ) : (
               <SourceViewer
+                key={current.id}
                 itemId={current.id}
                 canImport={!sourceReadOnlyReason}
                 canEdit={!sourceReadOnlyReason}
