@@ -1,14 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Cascadia PLM LLC
 
-import { createResourceScope } from '@cascadia/commons/managed-resources/index'
-import { scheduledTask } from '@cascadia/commons/managed-resources/adapters/timeout'
-import { presentationResource } from './presentation-resource'
+import { createOwnedLifetime } from '@cascadia/commons/managed-resources'
 import { tourProgression } from './tour-progression'
-import type {
-  ResourceLease,
-  ResourceOperationsOf,
-} from '@cascadia/commons/managed-resources/index'
+import type { LifetimeOwner } from '@cascadia/commons/managed-resources'
 import type { TourPorts, TourSnapshot } from './ports'
 import type { TourPhase } from './tour-progression'
 
@@ -17,12 +12,10 @@ const noCancellation = () => undefined
 
 /** One controller per committed provider lifetime; React state is a projection. */
 export function createTourController(ports: TourPorts) {
-  const scope = createResourceScope(ports.onError)
+  const owner = createOwnedLifetime(ports.onError)
   let phase: TourPhase = tourProgression.start('idle')
-  let pending:
-    ResourceLease<ResourceOperationsOf<typeof scheduledTask>> | undefined
-  let presentation:
-    ResourceLease<ResourceOperationsOf<typeof presentationResource>> | undefined
+  let pending: LifetimeOwner | undefined
+  let presentation: LifetimeOwner | undefined
 
   function readCompleted(): boolean {
     try {
@@ -47,13 +40,13 @@ export function createTourController(ports: TourPorts) {
   function releasePending() {
     const owned = pending
     pending = undefined
-    if (owned) void owned.release()
+    if (owned) void owned.dispose()
   }
 
   function releasePresentation() {
     const owned = presentation
     presentation = undefined
-    if (owned) void owned.release()
+    if (owned) void owned.dispose()
   }
 
   function cancel() {
@@ -99,30 +92,30 @@ export function createTourController(ports: TourPorts) {
     // Reserve before acquisition or vendor callbacks can reenter.
     phase = next.phase
     releasePending()
-    const acquired = scope.acquire(presentationResource, {
-      factory: ports.presentation,
-      onAcknowledge: acknowledge,
-    })
-    if (acquired.kind !== 'acquired') {
-      cancel()
-      if (acquired.kind === 'failed') ports.onError(acquired.error)
-      return
-    }
-    const activation = next.phase.commands.activate()
-    if (activation.kind !== 'advanced') {
-      void acquired.lease.release()
-      return
-    }
-    presentation = acquired.lease
-    phase = activation.phase
-    notify()
-    const owned = acquired.lease
-    void owned.handle.show().then((outcome) => {
-      if (outcome.kind === 'failed') {
+    const owned = createOwnedLifetime(ports.onError, owner.context)
+    presentation = owned
+    void owned.run(
+      (lifetime) => {
+        const view = lifetime.acquire(
+          () =>
+            ports.presentation({ onAcknowledge: lifetime.guard(acknowledge) }),
+          (acquiredView) => acquiredView.destroy(),
+        )
+        const activation = next.phase.commands.activate()
+        if (activation.kind !== 'advanced') {
+          void owned.dispose()
+          return
+        }
+        phase = activation.phase
+        notify()
+        view.show()
+      },
+      noCancellation,
+      (error) => {
         if (presentation === owned) cancel()
-        ports.onError(outcome.error)
-      }
-    })
+        ports.onError(error)
+      },
+    )
   }
 
   function scheduleAutomaticStart(): () => void {
@@ -136,20 +129,27 @@ export function createTourController(ports: TourPorts) {
     const next = phase.commands.schedule()
     if (next.kind !== 'advanced') return noCancellation
     phase = next.phase
-    const acquired = scope.acquire(scheduledTask, {
-      delayMs: DASHBOARD_RENDER_DELAY_MS,
-      run: () => {
-        if (readCompleted()) cancel()
-        else start()
-      },
-    })
-    if (acquired.kind !== 'acquired') {
-      cancel()
-      if (acquired.kind === 'failed') ports.onError(acquired.error)
-      return noCancellation
-    }
-    const owned = acquired.lease
+    const owned = createOwnedLifetime(ports.onError, owner.context)
     pending = owned
+    void owned.run(
+      (lifetime) =>
+        lifetime.acquire(
+          () =>
+            setTimeout(
+              lifetime.guard(() => {
+                if (readCompleted()) cancel()
+                else start()
+              }),
+              DASHBOARD_RENDER_DELAY_MS,
+            ),
+          clearTimeout,
+        ),
+      noCancellation,
+      (error) => {
+        if (pending === owned) cancel()
+        ports.onError(error)
+      },
+    )
     // Duplicate requests own nothing; old cleanup cannot cancel replacement.
     return () => {
       if (pending === owned) cancel()
@@ -173,12 +173,12 @@ export function createTourController(ports: TourPorts) {
   }
 
   function dispose() {
-    if (phase.state === 'disposed') return scope.dispose()
+    if (phase.state === 'disposed') return owner.dispose()
     const next = phase.commands.dispose()
     if (next.kind === 'advanced') phase = next.phase
     pending = undefined
     presentation = undefined
-    const cleanup = scope.dispose()
+    const cleanup = owner.dispose()
     notify()
     return cleanup
   }

@@ -1,174 +1,130 @@
-# Managed resources and typed progression
+# Owned resource lifetimes
 
 ## What this feature is
 
-Managed resources give an application owner a scope that tracks acquisition,
-operations, callbacks and cleanup. Typed progression derives legal commands and
-successor phases from a domain's state graph. These are independent contracts;
-resource disposal does not decide business completion.
+A lifetime owns allocations and callbacks until its owner ends it. Adapters
+receive acquisition authority; only the owner receives disposal authority.
+React bindings create one owner per committed input identity or DOM attachment.
 
 ## Why you use it
 
-Use a scope when imperative resources outlive a function call: an editor,
-presentation, timer, subscription or controller for asynchronous work. Use
-progression when legal next actions change with the phase. Simple React effects
-with one correctly paired setup and cleanup do not require migration.
+Use it for imperative resources such as model geometry, object URLs, editors,
+timers, and their callbacks. It handles partial setup, late asynchronous
+acquisition, replacement, and cleanup. Use the existing query layer for cached
+server reads; a correctly paired single React effect can remain local.
 
 ## Stable entry points
 
-Import `defineManagedResource` and `createResourceScope` from
-`@cascadia/commons/managed-resources/index`; import `defineProgression` from
-`@cascadia/commons/progression/index`. `scheduledTask` is the portable timeout
-adapter at `@cascadia/commons/managed-resources/adapters/timeout`.
+`createOwnedLifetime` and its types come from
+`@cascadia/commons/managed-resources`. React owners live in
+`@/lifecycle/useOwnedResource`, `@/lifecycle/useOwnedElement`, and
+`@/lifecycle/useOwnedEffect`. These hooks own resources, not durable workflows.
 
 ## Core mental model
 
-A declaration establishes acquisition and disposal, then `.withOperations()`
-checks operations against the inferred resource type. The scope issues an owner
-lease with `release()` and a consumer handle containing only declared operations.
-The raw resource remains inside the declaration. React state observes the domain
-controller rather than acting as its admission lock.
-Definitions are opaque; their factories and raw operations are not exposed by
-the public facade. `ResourceOperationsOf<typeof definition>` derives the operation
-type when an owner needs to store a lease.
+Call `lifetime.acquire(factory, release)` inside an adapter. The factory's return
+type determines the resource type and whether acquisition is synchronous or
+asynchronous. Cleanup is registered before the resource is handed back. A result
+arriving after expiry is released and rejected, so setup cannot continue with a
+dead resource. Register each partial acquisition before the next fallible step.
+
+`lifetime.child(onError)` creates independently disposable child authority.
+Closing an ancestor disables every descendant's acquisitions and guarded
+callbacks before cleanup begins. Child cleanup runs before earlier parent
+resources. Released children detach from their parent to avoid retaining old
+generations.
 
 ## How it executes
 
-Acquisition is synchronous and registered before the factory runs. Use
-`lifetime.onDispose()` for partial acquisitions before another fallible step,
-`lifetime.guard()` for callbacks, and `lifetime.signal` for cooperative cancellation.
-Asynchronous work belongs behind operations on an acquired controller.
+`owner.run(setup, publish?, onFailure?)` invokes setup immediately and returns a
+promise of `ready`, `expired`, or `failed`. Publication is guarded by the lifetime.
+Setup or publication failure ends the owner and releases partial acquisitions.
+`ready` means setup succeeded; it does not prove a business operation completed.
 
-Handle operations return promises containing `applied`, `expired` or `failed`.
-Effects begin immediately when an operation is invoked; its result is checked
-again after awaiting it. An expired result does not mean earlier effects were
-undone. Release immediately invalidates its handle and callbacks, signals abort,
-starts cleanup, and returns a cleanup report.
-
-Scope disposal closes admission and invalidates all owned resources before any
-cleanup. Finalizers start in reverse registration order. Independent asynchronous
-finalizers are awaited together; put dependent cleanup inside one finalizer.
-Cleanup errors are reported individually and do not skip remaining finalizers.
-Repeated disposal returns the same promise.
+`dispose()` closes admission, aborts the owner's signal, and starts finalizers in
+reverse registration order. Independent asynchronous cleanup is awaited together;
+put dependent cleanup in one finalizer or a child lifetime. Repeated disposal
+returns the same promise. Cleanup errors do not skip remaining cleanup and appear
+in its report, including errors from live children being closed.
 
 ## Small example
 
 ```ts
-import { createResourceScope } from '@cascadia/commons/managed-resources/index'
-import { scheduledTask } from '@cascadia/commons/managed-resources/adapters/timeout'
+import { createOwnedLifetime } from '@cascadia/commons/managed-resources'
 
-const scope = createResourceScope(console.error)
-const pending = scope.acquire(scheduledTask, {
-  delayMs: 1000,
-  run: () => console.log('Owner is still live'),
-})
-
-if (pending.kind === 'acquired') {
-  await pending.lease.release() // Cancels only this task.
-}
-await scope.dispose()
+const owner = createOwnedLifetime(console.error)
+await owner.run((lifetime) =>
+  lifetime.acquire(
+    () => new ResizeObserver(lifetime.guard(() => console.log('resized'))),
+    (observer) => observer.disconnect(),
+  ),
+)
+await owner.dispose()
 ```
 
-A rejected or duplicate request should return no cleanup authority. Never hand a
-request a cancellation function that targets whichever resource happens to be
-current later.
+Guard a vendor callback with `lifetime.guard(callback)` when the vendor can retain
+or fire it after disconnection. The callback receives no disposal authority.
 
 ## Real example
 
-An editor adapter can declare its vendor operations once:
+File preview owns one fetch and its resulting URL per file identity:
 
-```ts
-import { EditorState } from '@codemirror/state'
-import { EditorView } from '@codemirror/view'
-import { defineManagedResource } from '@cascadia/commons/managed-resources/index'
-
-const editorResource = defineManagedResource({
-  acquire: (input: { parent: HTMLElement; initialText: string }) =>
-    new EditorView({
-      parent: input.parent,
-      state: EditorState.create({ doc: input.initialText }),
-    }),
-  dispose: (view) => view.destroy(),
-}).withOperations({
-  readText: (view) => view.state.doc.toString(),
+```tsx
+const input = useMemo(() => ({ id: file.id }), [file.id])
+const preview = useOwnedResource(input, async ({ id }, lifetime) => {
+  const response = await fetch(`/api/v1/files/${id}/content`, {
+    signal: lifetime.signal,
+  })
+  if (!response.ok) throw new Error('Preview failed')
+  const blob = await response.blob()
+  return lifetime.acquire(() => URL.createObjectURL(blob), URL.revokeObjectURL)
 })
 ```
 
-The owner acquires this declaration through its scope and gives consumers only
-`lease.handle`. `readText()` returns an operation outcome containing a string;
-the handle has no `destroy()` or raw editor access. Choose the owner's identity
-from file and edit mode; a background content refetch should not recreate the
-editor and erase unsaved edits. This is an adapter example, not a migration of
-the existing source viewer.
+The hook derives `idle`, `loading`, `ready`, or `failed`. A null input disables
+acquisition. Identity uses `Object.is`, matching React's dependency comparison;
+memoize compound inputs explicitly. Callback changes do not restart setup.
+Optional `ready` and `failed` observers always see the latest committed callback.
 
-The guided tour's controller owns a presentation lease and a delayed startup
-lease. Its React provider creates a controller during layout setup and disposes
-it during cleanup. Driver.js and browser storage live behind tour-owned adapters.
-StrictMode's repeated setup receives a fresh controller; retained commands on the
-disposed controller cannot reacquire resources.
-
-The tour declares its progression once:
-
-```ts
-import { defineProgression } from '@cascadia/commons/progression/index'
-
-const progression = defineProgression({
-  idle: { start: 'active', dispose: 'disposed' },
-  active: { acknowledge: 'idle', cancel: 'idle', dispose: 'disposed' },
-  disposed: {},
-})
-const admission = progression.start('idle').commands.start()
-if (admission.kind === 'advanced') {
-  const dismissal = admission.phase.commands.acknowledge()
-  // dismissal.evidence, when advanced, records this specific accepted edge.
-}
-```
-
-The production tour also has scheduled, starting and settling phases. Its
-completion store accepts acknowledgement evidence, so cancellation evidence
-cannot be passed in its place. User dismissal counts as acknowledgement under
-the existing product policy; route cancellation does not.
+`useOwnedElement(identity, setup, onEvent?)` returns a callback ref. Detachment or
+identity replacement ends the old resource, while observer changes preserve it.
+Setup receives a guarded, typed `emit` function. This lets CodeMirror keep an
+in-progress document while routing edits to the current observer.
 
 ## How it relates to other features
 
-An editor may need ownership without progression. Manufacturing execution state
-belongs to the server; a screen scope owns its observation, not the durable run.
-AI streams can own cancellation controllers and subscriptions while persisting
-usage independently. Worker attempts still need database claims and broker
-delivery identity. These systems are not migrated by the tour fix.
+CAD loading uses the same acquisition contract for geometry and materials. Its
+material-replacement lifetime is a child of the loaded model. The tour uses child
+lifetimes for its pending start and active presentation. Tour-local typed progression remains
+separate: the tour graph decides which commands may run and which transition
+counts as acknowledgement; the resource lifetime cannot decide completion.
 
 ## Inspection and debugging
 
-Inspect acquisition and operation outcomes, cleanup reports, and the domain's
-snapshot. Progression yields `advanced`, `stale` or `invalid`; retained phase
-aliases become stale after an accepted transition, including after a cycle
-returns to a state with the same name. Commands and evidence types come from the
-graph. `transition(command)` supports a typed command selected dynamically;
-`commands.name()` is convenient when handling a union of phases.
+Inspect setup outcomes, cleanup reports, and the React resource state. Distinguish
+an expired result from a setup failure. A cleanup report covers registered cleanup
+settled during that disposal; later acquisitions still release themselves and
+report failures through the diagnostic callback.
 
 ## Anti-patterns
 
-Do not use component unmount as a durable workflow cancellation, treat abort as
-rollback, expose a raw-resource getter, or use React state to guard synchronous
-admission. Custom adapter operations and registered finalizers are the extension
-boundary. Shared resources should expose a per-owner subscription or lease,
-rather than transferring disposal of the underlying shared object.
-Finalizers must not await disposal of their own scope, which would wait on them
-in turn.
+Do not use unmount as remote rollback, put a changing observer into resource
+identity, retain an unguarded vendor callback, or register cleanup only after
+several fallible acquisitions. A finalizer must not await its own owner's disposal.
+Shared vendor assets require a per-owner subscription or lease adapter.
 
 ## Current limits
 
-Ownership and progression are local to one runtime. Transition evidence proves
-a local edge, not external authorization or a durable commit. Remote responses
-still require runtime validation, idempotency and reconciliation at their domain
-boundary. Cancellation cannot forcibly stop an adapter that ignores its signal.
+Disposal does not wait forever for an uncooperative acquisition. Its late result
+is released when it arrives; await the setup outcome when the caller must track
+that completion. Cancellation cannot undo effects already performed by a vendor.
+Registered asynchronous cleanup has no automatic timeout; process adapters must
+declare their own shutdown deadline.
 
-Cleanup awaits registered asynchronous finalizers; it has no built-in timeout.
-Adapters and process owners must supply deadlines where shutdown can stall.
-Finalizers registered after cleanup has already settled run immediately and
-report failures through the error callback; a previously returned report cannot
-promise to include future work. Resource handles must return domain data rather
-than leaking raw vendor objects through operation results.
+`adopt(resource, release)` is the explicit escape hatch for an already-created
+synchronous resource. It still registers cleanup after expiry, but cannot prevent
+effects that happened before adoption. Pending promises must use `acquire`.
+`onDispose` supports cleanup that cannot be represented by one acquired value.
 
 ## Related docs
 
