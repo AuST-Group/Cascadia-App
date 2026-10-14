@@ -109,7 +109,7 @@ export function AddRelationshipDialog({
   const [details, setDetails] = useState<Record<string, LineDetails>>({})
   const [loading, setLoading] = useState(false)
 
-  // Under BOM this is the source item's design plus the Standard Library;
+  // Under BOM this is the source item's design plus the libraries;
   // otherwise the plain by-type search
   const {
     scope: bomScope,
